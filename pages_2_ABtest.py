@@ -28,7 +28,11 @@ def plot_group_bar(df, metric):
     ax.yaxis.grid(True, linestyle='--', linewidth=0.5, color='#DDD')
     for bar in bars:
         yval = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2.0, yval + 0.01 * yval, f"{yval*100:.1f}%", ha='center', va='bottom', fontsize=10, color='#444')
+        if metric in ["CTR", "CVR"]:
+            label = f"{yval*100:.1f}%"
+        else:
+            label = f"{yval:,.0f}"
+        ax.text(bar.get_x() + bar.get_width()/2.0, yval + 0.01 * yval, label, ha='center', va='bottom', fontsize=10, color='#444')
     st.pyplot(fig)
 
 def plot_trend_line(df, metric):
@@ -37,7 +41,7 @@ def plot_trend_line(df, metric):
 
     fig, ax = plt.subplots(figsize=(9, 3.2))
     ax.set_facecolor("white")
-    colors = {"control": "#A0C4FF", "test": "#FFADAD"}
+    colors = {"control": "skyblue", "test": "salmon"}
     for group in daily_avg["group"].unique():
         group_data = daily_avg[daily_avg["group"] == group]
         ax.plot(group_data["Date"], group_data[metric], label=group.capitalize(), color=colors.get(group, None), linewidth=2)
@@ -48,7 +52,12 @@ def plot_trend_line(df, metric):
 
         for idx in [min_idx, max_idx, latest_idx]:
             row = group_data.loc[idx]
-            ax.annotate(f"{row[metric]*100:.1f}%", (row["Date"], row[metric]), textcoords="offset points", xytext=(0, -10), ha='center', fontsize=8, color='#444')
+            ax.plot(row["Date"], row[metric], 'o', color=colors[group], markersize=6)
+            if metric in ["CTR", "CVR"]:
+                label = f"{row[metric]*100:.1f}%"
+            else:
+                label = f"{row[metric]:,.0f}"
+            ax.annotate(label, (row["Date"], row[metric]), textcoords="offset points", xytext=(0, -12), ha='center', fontsize=8, color='#444')
 
     ax.set_xlabel("")
     ax.set_ylabel("")
@@ -72,8 +81,8 @@ def show_summary(df, metric):
     
     summary_html = f"""
     <div style='background-color: #F6F8FA; padding: 12px; max-width: 280px; margin: auto; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);'>
-        <div style='text-align:center'><h5 style='color:#333; font-size: 16px;'>Control Mean</h5><p style='font-size: 14px;'><b>{ctrl.mean():.4f}</b></p></div>
-        <div style='text-align:center'><h5 style='color:#333; font-size: 16px;'>Test Mean</h5><p style='font-size: 14px;'><b>{test.mean():.4f}</b></p></div>
+        <div style='text-align:center'><h5 style='color:#333; font-size: 16px;'>{metric} by Control</h5><p style='font-size: 14px;'><b>{ctrl.mean():.4f}</b></p></div>
+        <div style='text-align:center'><h5 style='color:#333; font-size: 16px;'>{metric} by Test</h5><p style='font-size: 14px;'><b>{test.mean():.4f}</b></p></div>
         <div style='text-align:center'><h5 style='color:#333; font-size: 16px;'>Uplift (%)</h5><p style='font-size: 14px;'><b style='color:{uplift_color}'>{uplift:.2f}%</b></p></div>
         <div style='text-align:center'><h5 style='color:#333; font-size: 16px;'>p-value</h5><p style='font-size: 14px;'><b>{p_val:.4f}</b></p></div>
     </div>
@@ -88,20 +97,41 @@ def show():
     with st.sidebar:
         st.markdown("---")
         metric = st.selectbox("Metric Selection", ["CTR", "CVR", "Revenue", "ROAS", "CPA"])
-        
+    
+    ctrl = df[df["group"] == "control"][metric]
+    test = df[df["group"] == "test"][metric]
+    uplift = (test.mean() - ctrl.mean()) / ctrl.mean() * 100
+    t_stat, p_val = ttest_ind(test, ctrl)
 
-    st.markdown(f"<h3 style='font-size: 20px; font-weight: 600; margin-top: 0;'>📈 {metric} Daily Performance Trend</h3>", unsafe_allow_html=True)
+    uplift_color = "#d33" if uplift > 0 else "#007bff"
+
+    col1, col2, col3, col4 = st.columns(4)
+    
+    if metric in ["CTR", "CVR"]:
+        ctrl_mean_fmt = f"{ctrl.mean()*100:.2f}%"
+        test_mean_fmt = f"{test.mean()*100:.2f}%"
+    else:
+        ctrl_mean_fmt = f"{ctrl.mean():,.0f}"
+        test_mean_fmt = f"{test.mean():,.0f}"
+
+    cards = [
+        ("Control Mean", ctrl_mean_fmt, None),
+        ("Test Mean", test_mean_fmt, None),
+        ("Uplift (%)", f"{'▲' if uplift > 0 else '▼'} {abs(uplift):.2f}%", uplift),
+        ("p-value", f"{p_val:.4f}", None)
+    ]
+    
+    for col, (label, value, uplift_value) in zip([col1, col2, col3, col4], cards):
+        uplift_style = f"color:{'#d33' if uplift_value and uplift_value > 0 else '#007bff'};" if uplift_value is not None else "color:#111;"
+        with col:
+            st.markdown(f"""
+                <div style='background-color:#F6F8FA; padding: 16px; border-radius: 12px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.06);'>
+                    <div style='font-weight: 500; font-size: 13px; color:#555;'>{label}</div>
+                    <div style='{uplift_style} font-size: 22px; font-weight: 700; margin-top: 4px;'>{value}</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown(f"<h3 style='font-size: 20px; font-weight: 600; margin-top: 32px;'>📈 {metric} Daily Performance Trend</h3>", unsafe_allow_html=True)
     plot_trend_line(df, metric)
 
     st.markdown(" ")
-    
-
-    col1, col2 = st.columns([2, 2])
-
-    with col1:
-        st.markdown(f"<h3 style= 'font-size: 20px; font-weight: 600; margin-top: 0;'>📊 {metric} by Group</h3>", unsafe_allow_html=True)
-        plot_group_bar(df, metric)
-
-    with col2:
-        st.markdown("<h3 style='font-size: 20px; font-weight: 600; margin-top: 0;'>📋 Summary</h3>", unsafe_allow_html=True)
-        show_summary(df, metric)
